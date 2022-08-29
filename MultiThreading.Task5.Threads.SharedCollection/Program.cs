@@ -5,15 +5,16 @@
  * Use Thread, ThreadPool or Task classes for thread creation and any kind of synchronization constructions.
  */
 using System;
-using System.Collections.Generic;
-using System.Collections.ObjectModel;
+using System.Collections.Concurrent;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace MultiThreading.Task5.Threads.SharedCollection
 {
     class Program
     {
-        static Random random = new Random();
+        static readonly Random random = new Random();
+        static readonly Semaphore semaphore = new Semaphore(1, 1);
 
         static void Main(string[] args)
         {
@@ -23,49 +24,63 @@ namespace MultiThreading.Task5.Threads.SharedCollection
             Console.WriteLine();
 
             // feel free to add your code
-
-            var list = new List<int>();
+            var blockingCollection = new BlockingCollection<int>();
             var isChanged = false;
+            var resetEvent = new ManualResetEvent(false);
 
-            object locker = new object();
-
-            var secondTask = Task.Factory.StartNew(() =>
+            var creationTask = new Task(() =>
             {
-                while (true)
+                var count = GetRandom(10, 20);
+                for (int i = 0; i < count;)
                 {
+                    semaphore.WaitOne();
+
+                    if (!isChanged)
+                    {
+                        Console.WriteLine($"Task {Task.CurrentId} adding item");
+                        isChanged = blockingCollection.TryAdd(GetRandom(1, 100));
+                        i++;
+                    }
+
+                    semaphore.Release();
+                }
+
+                blockingCollection.CompleteAdding();
+                resetEvent.Set();
+            });
+
+            var printingTask = new Task(() =>
+            {
+                while (!blockingCollection.IsAddingCompleted)
+                {
+                    semaphore.WaitOne();
+
                     if (isChanged)
                     {
-                        lock (locker)
-                        {
-                            isChanged = false;
-                            Console.WriteLine(string.Join("; ", list));
-
-                        }
+                        Console.WriteLine($"Task {Task.CurrentId}: " + string.Join("; ", blockingCollection));
+                        isChanged = false;
+                        Task.Delay(GetRandom(1, 2) * 1000);
                     }
+
+                    semaphore.Release();
                 }
             });
 
-            var task = Task.Factory.StartNew(() =>
-            {
-                for (int i = 0; i < 10; i++)
-                {
-                    lock (locker)
-                    {
-                        list.Add(GetRandomInt());
-                        isChanged = true;
-                    }
-                    //Task.Delay(1000 * 60 * 3); //sec
-                }
-            });
+            printingTask.Start();
+            creationTask.Start();
 
+            resetEvent.WaitOne();
+
+            Console.WriteLine("Program finished!");
             Console.ReadKey();
         }
 
-        static int GetRandomInt()
+        private static int GetRandom(int v1, int v2)
         {
             lock (random)
             {
-                return random.Next(0, 10);
+                var result = random.Next(v1, v2);
+                return result;
             }
         }
     }
